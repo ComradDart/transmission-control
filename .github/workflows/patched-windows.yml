@@ -18,10 +18,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip install aqtinstall
           $qtDir = Join-Path $env:RUNNER_TEMP 'Qt'
-          python -m aqt install-qt windows desktop 6.12.0 win64_llvm_mingw -O $qtDir
-          $qt = Join-Path $qtDir '6.12.0\llvm-mingw_64'
+          $qtUrl = 'https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6120/qt6_6120_llvm_mingw/qt.qt6.6120.win64_llvm_mingw'
+          foreach ($module in 'qtbase', 'qttools', 'qtsvg', 'qtdeclarative', 'qttranslations') {
+            $name = "6.12.0-0-202609280346${module}-Windows-Windows_11_24H2-Clang-Windows-Windows_11_24H2-X86_64.7z"
+            $archive = Join-Path $env:RUNNER_TEMP $name
+            Invoke-WebRequest "$qtUrl/$name" -OutFile $archive
+            & "$env:ProgramFiles\7-Zip\7z.exe" x -y "-o$qtDir" $archive
+          }
+          $deployQt = Get-ChildItem $qtDir -Recurse -Filter windeployqt.exe | Select-Object -First 1
+          if (!$deployQt) { throw 'windeployqt.exe not found' }
+          $qt = $deployQt.Directory.Parent.FullName
           $llvmZip = Join-Path $env:RUNNER_TEMP 'llvm.zip'
           Invoke-WebRequest 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260602/llvm-mingw-20260602-ucrt-x86_64.zip' -OutFile $llvmZip
           Expand-Archive $llvmZip $env:RUNNER_TEMP
@@ -29,8 +36,12 @@ jobs:
           if (!(Test-Path "$llvm\bin\mingw32-make.exe")) {
             Copy-Item (Get-Command mingw32-make.exe).Source "$llvm\bin\mingw32-make.exe"
           }
-          winget install --id JRSoftware.InnoSetup.7 --exact --source winget --silent --accept-source-agreements --accept-package-agreements
-          $inno = @("$env:ProgramFiles\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $innoSetup = Join-Path $env:RUNNER_TEMP 'inno.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $innoSetup
+          $innoDir = Join-Path $env:RUNNER_TEMP 'Inno Setup 7'
+          $installation = Start-Process $innoSetup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$innoDir`"" -Wait -PassThru
+          if ($installation.ExitCode -ne 0) { throw "Inno Setup install failed: $($installation.ExitCode)" }
+          $inno = @("$innoDir\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (!$inno) { throw 'Inno Setup compiler not found' }
           "QT_ROOT=$qt", "LLVM_MINGW_ROOT=$llvm", "INNO_SETUP_COMPILER=$inno", "CMAKE_EXE=$((Get-Command cmake.exe).Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build unsigned installer
