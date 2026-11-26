@@ -1,0 +1,45 @@
+name: Build patched Planetary for Windows
+on:
+  push:
+    branches:
+      - build-open-destination-folder-windows
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Qt and Windows tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install aqtinstall
+          $qtDir = Join-Path $env:RUNNER_TEMP 'Qt'
+          python -m aqt install-qt windows desktop 6.12.0 win64_llvm_mingw -O $qtDir
+          $qt = Join-Path $qtDir '6.12.0\llvm-mingw_64'
+          $llvmZip = Join-Path $env:RUNNER_TEMP 'llvm.zip'
+          Invoke-WebRequest 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260602/llvm-mingw-20260602-ucrt-x86_64.zip' -OutFile $llvmZip
+          Expand-Archive $llvmZip $env:RUNNER_TEMP
+          $llvm = Join-Path $env:RUNNER_TEMP 'llvm-mingw-20260602-ucrt-x86_64'
+          if (!(Test-Path "$llvm\bin\mingw32-make.exe")) {
+            Copy-Item (Get-Command mingw32-make.exe).Source "$llvm\bin\mingw32-make.exe"
+          }
+          winget install --id JRSoftware.InnoSetup.7 --exact --source winget --silent --accept-source-agreements --accept-package-agreements
+          $inno = @("$env:ProgramFiles\Inno Setup 7\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (!$inno) { throw 'Inno Setup compiler not found' }
+          "QT_ROOT=$qt", "LLVM_MINGW_ROOT=$llvm", "INNO_SETUP_COMPILER=$inno", "CMAKE_EXE=$((Get-Command cmake.exe).Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build unsigned installer
+        shell: pwsh
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/windows-release.ps1 -Unsigned -Jobs 4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Planetary-Windows-x64-Setup
+          path: |
+            dist/Planetary-*-Windows-x64-Setup.exe
+            dist/Planetary-Windows-hashes.json
+          if-no-files-found: error
